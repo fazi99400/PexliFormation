@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PexliFormation — Rust → SBF Converter</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">P</div>
+        <div class="brand-text">
+          <h1>PexliFormation</h1>
+          <span>Rust contract → SBF converter · offline · one click</span>
+        </div>
+      </div>
+      <div class="toolchain" id="toolchain">
+        <span class="dot" id="tc-dot"></span>
+        <span id="tc-text">Checking toolchain…</span>
+      </div>
+    </header>
+
+    <main class="translator">
+      <!-- LEFT: Rust input -->
+      <section class="panel">
+        <div class="panel-head">
+          <span class="tag rust">Rust contract</span>
+          <button class="ghost" id="btn-pick">Choose file / project…</button>
+        </div>
+        <div class="drop" id="drop">
+          <p id="input-name">Drop a <b>.rs</b> file or a Cargo project folder here</p>
+          <p class="muted" id="input-path">No file selected</p>
+        </div>
+        <pre class="code" id="preview">// Your Rust smart contract source will appear here…</pre>
+      </section>
+
+      <!-- CENTER: convert -->
+      <div class="middle">
+        <button class="convert" id="btn-convert" disabled>
+          <span class="arrow">→</span>
+          <span>Convert to SBF</span>
+        </button>
+        <label class="outdir">
+          Output folder
+          <button class="ghost small" id="btn-outdir">Choose…</button>
+          <span class="muted" id="outdir-path">(same as input)</span>
+        </label>
+      </div>
+
+      <!-- RIGHT: SBF output -->
+      <section class="panel">
+        <div class="panel-head">
+          <span class="tag sbf">SBF output</span>
+          <button class="ghost" id="btn-open" disabled>Open folder</button>
+        </div>
+        <div class="result" id="result">
+          <p class="muted">The converted <b>.so</b> (SBF bytecode) and its details will show here.</p>
+        </div>
+        <pre class="log" id="log"></pre>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span id="status">Ready.</span>
+      <span class="version">v1.0.0 · works offline</span>
+    </footer>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

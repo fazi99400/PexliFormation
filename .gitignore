@@ -1,0 +1,23 @@
+# Rust / Tauri
+/src-tauri/target/
+/src-tauri/gen/
+**/*.rs.bk
+
+# Node
+/node_modules/
+npm-debug.log*
+yarn-error.log
+
+# Build output
+/dist/
+*.msi
+*.exe.zip
+
+# Bundled toolchain (large; not committed)
+/src-tauri/resources/platform-tools/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
