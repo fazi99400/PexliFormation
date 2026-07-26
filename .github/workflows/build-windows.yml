@@ -15,6 +15,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Needed so the tag build can create a Release and upload the installers.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
