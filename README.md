@@ -6,6 +6,10 @@ Think of it as a *translator*: on the left you drop your Rust contract, you clic
 
 ![Rust → SBF](https://img.shields.io/badge/Rust-%E2%86%92%20SBF-orange) ![Windows](https://img.shields.io/badge/Windows-one--click%20install-blue) ![Offline](https://img.shields.io/badge/works-offline-green)
 
+> **Verified on CI (Windows):** `examples/hello_pexli.rs` converts to a working
+> `hello_pexli.so` SBF program (18,560 bytes) using the exact flow the app runs.
+> The one-click Windows installer (`.exe` + `.msi`) builds green on every push.
+
 ---
 
 ## What it does
