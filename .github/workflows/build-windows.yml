@@ -70,7 +70,8 @@ jobs:
         run: |
           $u = "https://release.anza.xyz/stable/agave-install-init-x86_64-pc-windows-msvc.exe"
           Invoke-WebRequest -Uri $u -OutFile "$env:TEMP\agave-install-init.exe"
-          & "$env:TEMP\agave-install-init.exe"
+          # The init binary needs the release channel/version as an argument.
+          & "$env:TEMP\agave-install-init.exe" stable
           "$env:USERPROFILE\.local\share\solana\install\active_release\bin" |
             Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
