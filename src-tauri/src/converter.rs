@@ -59,7 +59,20 @@ pub fn convert(
     emit(app, &format!("Project: {}", project_dir.display()));
     emit(app, "Starting SBF build (cargo build-sbf)…");
 
-    run_build(app, &tool, &project_dir)?;
+    // Offline-first: use only the bundled crate cache (no network). If a
+    // contract needs extra crates that aren't cached, fall back to fetching
+    // them online (into the same isolated cache).
+    match run_build(app, &tool, &project_dir, true) {
+        Ok(()) => {}
+        Err((msg, offline_miss)) => {
+            if offline_miss {
+                emit(app, "Some crates weren't in the offline cache — fetching them (needs internet)…");
+                run_build(app, &tool, &project_dir, false).map_err(|(m, _)| m)?;
+            } else {
+                return Err(msg);
+            }
+        }
+    }
 
     // Locate the produced .so.
     let so = find_output(&project_dir)
@@ -170,15 +183,31 @@ codegen-units = 1
 /// The build is fully self-contained and isolated: it uses the bundled
 /// toolchain and an app-private CARGO_HOME, so it never installs anything and
 /// never touches the user's own Rust/cargo setup.
-fn run_build(app: &AppHandle, tool: &Path, project_dir: &Path) -> Result<(), String> {
+///
+/// On failure returns `(message, offline_miss)` where `offline_miss` is true if
+/// the failure looks like a crate was missing from the offline cache — the
+/// caller can then retry online.
+fn run_build(
+    app: &AppHandle,
+    tool: &Path,
+    project_dir: &Path,
+    offline: bool,
+) -> Result<(), (String, bool)> {
     // `cargo-build-sbf` is invoked directly; it behaves like `cargo build-sbf`.
     let mut cmd = Command::new(tool);
     cmd.current_dir(project_dir);
+    if offline {
+        cmd.env("CARGO_NET_OFFLINE", "true");
+    }
 
-    // Put the bundled toolchain's own bin dir first so its rust/llvm win over
-    // anything on the system.
+    // Put the bundled toolchain's own bin dirs first so its cargo/rustc/llvm win
+    // over anything on the system. cargo-build-sbf shells out to `cargo` for
+    // metadata, so the bundled host `cargo` must be discoverable here.
     if let Some(path) = std::env::var_os("PATH") {
         let mut paths: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        if let Some(hostbin) = toolchain::bundled_host_bin(app) {
+            paths.insert(0, hostbin);
+        }
         if let Some(bindir) = toolchain::bin_dir(tool) {
             paths.insert(0, bindir);
         }
@@ -198,33 +227,60 @@ fn run_build(app: &AppHandle, tool: &Path, project_dir: &Path) -> Result<(), Str
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Failed to start cargo build-sbf: {e}"))?;
+        .map_err(|e| (format!("Failed to start cargo build-sbf: {e}"), false))?;
+
+    // Shared flag: did the output look like a crate was missing offline?
+    let offline_miss = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Drain stderr on its own thread so a full pipe can't block stdout.
     let stderr = child.stderr.take();
     let app2 = app.clone();
+    let miss2 = offline_miss.clone();
     let joiner = std::thread::spawn(move || {
         if let Some(e) = stderr {
             for line in BufReader::new(e).lines().map_while(Result::ok) {
+                if looks_like_offline_miss(&line) {
+                    miss2.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 let _ = app2.emit("build-log", line);
             }
         }
     });
     if let Some(stdout) = child.stdout.take() {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if looks_like_offline_miss(&line) {
+                offline_miss.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             emit(app, &line);
         }
     }
     let _ = joiner.join();
 
-    let status = child.wait().map_err(|e| e.to_string())?;
+    let status = child.wait().map_err(|e| (e.to_string(), false))?;
     if !status.success() {
-        return Err(format!(
-            "SBF build failed (exit {}). See the log for compiler errors.",
-            status.code().unwrap_or(-1)
+        let miss = offline_miss.load(std::sync::atomic::Ordering::Relaxed);
+        return Err((
+            format!(
+                "SBF build failed (exit {}). See the log for compiler errors.",
+                status.code().unwrap_or(-1)
+            ),
+            miss,
         ));
     }
     Ok(())
+}
+
+/// Heuristic: does this cargo line indicate a crate was unavailable offline?
+fn looks_like_offline_miss(line: &str) -> bool {
+    let l = line.to_ascii_lowercase();
+    l.contains("net_offline")
+        || l.contains("--offline")
+        || l.contains("offline mode")
+        || l.contains("no matching package")
+        || l.contains("failed to download")
+        || l.contains("failed to get")
+        || l.contains("unable to get packages")
+        || (l.contains("registry") && l.contains("offline"))
 }
 
 /// An app-private CARGO_HOME under the app's local data dir. Crate downloads go

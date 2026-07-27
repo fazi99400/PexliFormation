@@ -211,10 +211,50 @@ pub fn bin_dir(tool: &Path) -> Option<PathBuf> {
     tool.parent().map(|p| p.to_path_buf())
 }
 
-/// The user's `~/.cargo/bin`, if it exists — needed so `cargo-build-sbf` can
-/// find the host `cargo` that drives the build.
-pub fn cargo_bin() -> Option<PathBuf> {
-    home_dir().map(|h| h.join(".cargo").join("bin")).filter(|p| p.is_dir())
+#[cfg(windows)]
+const HOST_CARGO: &str = "cargo.exe";
+#[cfg(not(windows))]
+const HOST_CARGO: &str = "cargo";
+
+/// The bundled host toolchain bin dir (the `rust/bin` inside platform-tools
+/// that holds `cargo`/`rustc`). `cargo-build-sbf` shells out to `cargo` for
+/// metadata, so this must be on PATH — and we want *our* bundled one, never the
+/// user's system Rust. Returns `None` if we're not running from a bundle.
+pub fn bundled_host_bin(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let res = app.path().resource_dir().ok()?;
+    let root = res.join("resources").join("platform-tools");
+    // The usual layout first.
+    let known = root
+        .join("bin")
+        .join("sdk")
+        .join("sbf")
+        .join("dependencies")
+        .join("platform-tools")
+        .join("rust")
+        .join("bin");
+    if known.join(HOST_CARGO).is_file() {
+        return Some(known);
+    }
+    // Fall back to a bounded search under the bundled toolchain.
+    find_dir_with(&root, HOST_CARGO, 8)
+}
+
+/// Depth-bounded search for the directory containing `file`.
+fn find_dir_with(root: &Path, file: &str, depth: usize) -> Option<PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    if root.join(file).is_file() {
+        return Some(root.to_path_buf());
+    }
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if let Some(found) = find_dir_with(&e.path(), file, depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn emit(app: &tauri::AppHandle, line: &str) {

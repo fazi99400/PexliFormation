@@ -93,9 +93,18 @@ jobs:
         run: |
           # Prove the bundled compiler + seed convert Rust->SBF with a minimal
           # PATH (no ~/.cargo, no Agave install) and a fresh isolated CARGO_HOME.
-          $bundledBin = "$env:GITHUB_WORKSPACE\src-tauri\resources\platform-tools\bin"
-          $env:PATH = "$bundledBin;$env:SystemRoot\System32;$env:SystemRoot"
+          $ptRoot = "$env:GITHUB_WORKSPACE\src-tauri\resources\platform-tools"
+          $bundledBin = "$ptRoot\bin"
+          # The bundled host cargo/rustc live inside platform-tools; find them.
+          $cargoExe = Get-ChildItem -Path $ptRoot -Recurse -Filter cargo.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cargoExe) { Write-Error "No bundled cargo.exe under platform-tools"; exit 1 }
+          $cargoDir = $cargoExe.DirectoryName
+          Write-Host "Bundled host cargo: $($cargoExe.FullName)"
+          $env:PATH = "$bundledBin;$cargoDir;$env:SystemRoot\System32;$env:SystemRoot"
           $env:CARGO_HOME = "$env:TEMP\iso-cargo"
+          # Force every cargo operation (incl. the internal `cargo metadata`)
+          # offline, to prove the bundled seed is enough with no network.
+          $env:CARGO_NET_OFFLINE = "true"
           New-Item -ItemType Directory -Force -Path "$env:CARGO_HOME\registry" | Out-Null
           Copy-Item "$env:GITHUB_WORKSPACE\src-tauri\resources\cargo-seed\registry\*" `
                     "$env:CARGO_HOME\registry" -Recurse -Force
@@ -116,8 +125,8 @@ jobs:
           solana-program = "1.18"
           "@ | Out-File -Encoding utf8 "$proj\Cargo.toml"
 
-          # Force offline so this proves the bundle needs no network.
-          & "$bundledBin\cargo-build-sbf.exe" --manifest-path "$proj\Cargo.toml" -- --offline
+          # CARGO_NET_OFFLINE above forces the whole build offline.
+          & "$bundledBin\cargo-build-sbf.exe" --manifest-path "$proj\Cargo.toml"
           $so = "$proj\target\deploy\hello_pexli.so"
           if (Test-Path $so) {
             $f = Get-Item $so
