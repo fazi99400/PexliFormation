@@ -26,7 +26,7 @@ async function checkToolchain() {
       $("toolchain").onclick = null;
     } else {
       $("tc-dot").className = "dot bad";
-      $("tc-text").textContent = "SBF toolchain missing — click to set up";
+      $("tc-text").textContent = "SBF toolchain not set up — installs automatically on first convert";
       $("toolchain").style.cursor = "pointer";
       $("toolchain").onclick = installToolchain;
     }

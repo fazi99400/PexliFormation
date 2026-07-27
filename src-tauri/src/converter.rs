@@ -34,8 +34,18 @@ pub fn convert(
     input_path: &str,
     output_dir: Option<String>,
 ) -> Result<ConvertResult, String> {
-    let tool = toolchain::resolve(app)
-        .ok_or("SBF toolchain (cargo-build-sbf) not found. Install it from the toolchain badge.")?;
+    // Check for the SBF compiler. If it is missing, set it up automatically so
+    // a single click does the whole job: install the toolchain, then convert.
+    let tool = match toolchain::resolve(app) {
+        Some(t) => t,
+        None => {
+            emit(app, "SBF toolchain not found — installing it now (one-time setup)…");
+            toolchain::install(app)?;
+            toolchain::resolve(app).ok_or(
+                "SBF toolchain setup did not finish. Please try again, or restart the app.",
+            )?
+        }
+    };
 
     let input = PathBuf::from(input_path);
     if !input.exists() {
@@ -161,14 +171,18 @@ fn run_build(app: &AppHandle, tool: &Path, project_dir: &Path) -> Result<(), Str
     let mut cmd = Command::new(tool);
     cmd.current_dir(project_dir);
 
-    // Make sure the platform-tools bin dir is discoverable.
-    if let Some(bindir) = toolchain::bin_dir(tool) {
-        if let Some(path) = std::env::var_os("PATH") {
-            let mut paths: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    // Make sure both the platform-tools bin dir AND the host cargo (~/.cargo/bin,
+    // which drives the SBF build) are discoverable.
+    if let Some(path) = std::env::var_os("PATH") {
+        let mut paths: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        if let Some(cargo) = toolchain::cargo_bin() {
+            paths.insert(0, cargo);
+        }
+        if let Some(bindir) = toolchain::bin_dir(tool) {
             paths.insert(0, bindir);
-            if let Ok(joined) = std::env::join_paths(paths) {
-                cmd.env("PATH", joined);
-            }
+        }
+        if let Ok(joined) = std::env::join_paths(paths) {
+            cmd.env("PATH", joined);
         }
     }
 

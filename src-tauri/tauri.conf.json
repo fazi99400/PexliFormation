@@ -28,6 +28,9 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Pexli Labs",
+    "copyright": "© Pexli Labs",
+    "category": "DeveloperTool",
     "targets": ["nsis", "msi"],
     "icon": [
       "icons/32x32.png",

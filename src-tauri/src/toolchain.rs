@@ -1,18 +1,23 @@
-// Locating and reporting the SBF build toolchain (cargo-build-sbf).
+// Locating AND automatically setting up the SBF build toolchain
+// (cargo-build-sbf).
 //
 // PexliFormation drives the Pexli/Solana-style SBF compiler. That compiler is
 // shipped as `cargo-build-sbf` (part of the Solana/Agave platform-tools). We
 // look for it in three places, in order:
-//   1. A copy bundled inside the app (resources/platform-tools) — this is what
-//      makes the app fully offline.
-//   2. The PATH (a developer machine that already has Solana/Agave installed).
+//   1. A copy bundled inside the app (resources/platform-tools) — fully offline.
+//   2. The PATH (a machine that already has Solana/Agave installed).
 //   3. The default per-user install location (~/.local/share/solana ...).
+//
+// When it is missing, `install()` performs the whole one-time setup itself
+// (Rust + Agave + platform-tools) so the user only has to click once — no
+// terminal, no manual steps.
 
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use serde::Serialize;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg(windows)]
 const EXE: &str = "cargo-build-sbf.exe";
@@ -60,7 +65,13 @@ fn default_install_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(home) = home_dir() {
         // Agave / Solana active_release layout.
-        roots.push(home.join(".local").join("share").join("solana").join("install").join("active_release"));
+        roots.push(
+            home.join(".local")
+                .join("share")
+                .join("solana")
+                .join("install")
+                .join("active_release"),
+        );
     }
     roots
 }
@@ -97,27 +108,115 @@ pub fn info(app: &tauri::AppHandle) -> ToolchainInfo {
     }
 }
 
-/// First-run install: `cargo-build-sbf` self-downloads the platform-tools the
-/// first time it is invoked. If it is not yet on the system at all we fall back
-/// to the bundled copy check. This step needs the internet exactly once; after
-/// that the toolchain lives on disk and the app runs fully offline.
+/// One-click setup. If the toolchain is already present we just warm up the
+/// platform-tools; otherwise we install everything automatically and stream the
+/// progress to the UI. This needs the internet once; afterwards the app runs
+/// fully offline.
 pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
-    if resolve(app).is_some() {
-        // Trigger platform-tools download by asking for the version.
-        if let Some(path) = resolve(app) {
-            let _ = Command::new(path).arg("--version").output();
-        }
+    if let Some(tool) = resolve(app) {
+        emit(app, "SBF toolchain found — fetching the compiler (platform-tools) if needed…");
+        let _ = warmup(app, &tool);
         return Ok(());
     }
-    Err(
-        "cargo-build-sbf was not found. Install the Solana/Agave CLI once, or \
-         reinstall PexliFormation with the bundled toolchain, then reopen the app."
-            .into(),
-    )
+
+    #[cfg(windows)]
+    {
+        install_windows(app)?;
+        match resolve(app) {
+            Some(tool) => {
+                let _ = warmup(app, &tool);
+                emit(app, "Setup complete. You can now convert contracts.");
+                Ok(())
+            }
+            None => Err(
+                "Setup ran but cargo-build-sbf was still not found. Please close and reopen \
+                 PexliFormation, then try again."
+                    .into(),
+            ),
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Automatic setup is currently implemented for Windows only.".into())
+    }
+}
+
+/// Run the bundled PowerShell setup (Rust + Agave + platform-tools), streaming
+/// every line to the UI so the user sees live progress.
+#[cfg(windows)]
+fn install_windows(app: &tauri::AppHandle) -> Result<(), String> {
+    // Single source of truth: the same script shipped in scripts/.
+    const SCRIPT: &str = include_str!("../../scripts/setup-toolchain.ps1");
+
+    let path = std::env::temp_dir().join("pexliformation-setup.ps1");
+    std::fs::write(&path, SCRIPT).map_err(|e| format!("Cannot write setup script: {e}"))?;
+
+    emit(app, "Starting one-time SBF toolchain setup…");
+    emit(app, "This downloads the Rust + SBF compiler once (a few hundred MB). Please wait.");
+
+    let mut cmd = Command::new("powershell");
+    cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&path);
+    stream(app, cmd)
+}
+
+/// Ask cargo-build-sbf for its version, which triggers the first-time
+/// platform-tools download if it has not happened yet.
+fn warmup(app: &tauri::AppHandle, tool: &Path) -> Result<(), String> {
+    let mut cmd = Command::new(tool);
+    cmd.arg("--version");
+    stream(app, cmd)
+}
+
+/// Spawn a command and stream stdout + stderr to the UI without deadlocking.
+fn stream(app: &tauri::AppHandle, mut cmd: Command) -> Result<(), String> {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start setup process: {e}"))?;
+
+    // Drain stderr on a separate thread so a full pipe can't block stdout.
+    let stderr = child.stderr.take();
+    let app2 = app.clone();
+    let joiner = std::thread::spawn(move || {
+        if let Some(e) = stderr {
+            for line in BufReader::new(e).lines().map_while(Result::ok) {
+                let _ = app2.emit("build-log", line);
+            }
+        }
+    });
+
+    if let Some(out) = child.stdout.take() {
+        for line in BufReader::new(out).lines().map_while(Result::ok) {
+            emit(app, &line);
+        }
+    }
+
+    let _ = joiner.join();
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Setup exited with code {} — see the log above.",
+            status.code().unwrap_or(-1)
+        ))
+    }
 }
 
 /// Directory that should be on PATH so `cargo-build-sbf` can find its sibling
 /// tools (rustc/llvm from platform-tools).
 pub fn bin_dir(tool: &Path) -> Option<PathBuf> {
     tool.parent().map(|p| p.to_path_buf())
+}
+
+/// The user's `~/.cargo/bin`, if it exists — needed so `cargo-build-sbf` can
+/// find the host `cargo` that drives the build.
+pub fn cargo_bin() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".cargo").join("bin")).filter(|p| p.is_dir())
+}
+
+fn emit(app: &tauri::AppHandle, line: &str) {
+    let _ = app.emit("build-log", line.to_string());
 }

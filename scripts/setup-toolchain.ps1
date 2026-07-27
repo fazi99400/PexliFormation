@@ -1,39 +1,48 @@
 # PexliFormation — one-time SBF toolchain setup for Windows.
 #
-# PexliFormation itself is a normal desktop app. To actually compile Rust into
-# SBF it needs the Solana/Agave "platform-tools" (which provides
-# `cargo-build-sbf`). This script installs them once. After this, the app runs
-# offline.
+# The app runs this automatically the first time you convert (or when you click
+# the toolchain badge). It installs, only if missing:
+#   1. Rust (rustup)                         — hosts the build
+#   2. Agave/Solana CLI (cargo-build-sbf)    — the SBF compiler
+#   3. platform-tools                        — the SBF LLVM/rustc (downloaded once)
+# After this, PexliFormation converts fully offline.
 #
-# Run in PowerShell:
-#     powershell -ExecutionPolicy Bypass -File scripts\setup-toolchain.ps1
+# Can also be run by hand:
+#   powershell -ExecutionPolicy Bypass -File scripts\setup-toolchain.ps1
 
-Write-Host "PexliFormation — SBF toolchain setup" -ForegroundColor Cyan
+$ErrorActionPreference = "Stop"
+Write-Host "PexliFormation — SBF toolchain setup"
+
+$cargoBin  = Join-Path $env:USERPROFILE ".cargo\bin"
+$solanaBin = Join-Path $env:USERPROFILE ".local\share\solana\install\active_release\bin"
+$env:Path  = "$cargoBin;$solanaBin;$env:Path"
 
 # 1. Rust (rustup) — needed to host the SBF target.
 if (-not (Get-Command rustc -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing Rust (rustup)..." -ForegroundColor Yellow
-    $rustup = "$env:TEMP\rustup-init.exe"
+    Write-Host "[1/3] Installing Rust (rustup)..."
+    $rustup = Join-Path $env:TEMP "rustup-init.exe"
     Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustup
-    & $rustup -y
-    $env:Path += ";$env:USERPROFILE\.cargo\bin"
+    & $rustup -y --profile minimal --default-toolchain stable
+    $env:Path = "$cargoBin;$env:Path"
 } else {
-    Write-Host "Rust already installed." -ForegroundColor Green
+    Write-Host "[1/3] Rust already installed."
 }
 
 # 2. Agave / Solana CLI — ships cargo-build-sbf + platform-tools.
 if (-not (Get-Command cargo-build-sbf -ErrorAction SilentlyContinue)) {
-    Write-Host "Installing Agave/Solana CLI (provides cargo-build-sbf)..." -ForegroundColor Yellow
-    $inst = "$env:TEMP\agave-install-init.exe"
-    Invoke-WebRequest -Uri "https://release.anza.xyz/stable/agave-install-init-x86_64-pc-windows-msvc.exe" -OutFile $inst
-    & $inst
-    $env:Path += ";$env:USERPROFILE\.local\share\solana\install\active_release\bin"
+    Write-Host "[2/3] Installing SBF compiler (Agave)..."
+    $init = Join-Path $env:TEMP "agave-install-init.exe"
+    $url  = "https://release.anza.xyz/stable/agave-install-init-x86_64-pc-windows-msvc.exe"
+    Invoke-WebRequest -Uri $url -OutFile $init
+    # The init binary needs the release channel as an argument.
+    & $init stable
+    $env:Path = "$solanaBin;$env:Path"
 } else {
-    Write-Host "cargo-build-sbf already installed." -ForegroundColor Green
+    Write-Host "[2/3] SBF compiler already installed."
 }
 
-# 3. Warm up platform-tools (downloads the SBF LLVM/rustc once).
-Write-Host "Warming up platform-tools..." -ForegroundColor Yellow
+# 3. Warm up platform-tools (downloads the SBF LLVM/rustc on first run).
+Write-Host "[3/3] Fetching platform-tools (one-time download)..."
 cargo-build-sbf --version
 
-Write-Host "Done. Open PexliFormation — the toolchain badge should be green." -ForegroundColor Green
+Write-Host "Setup complete. PexliFormation is ready to convert offline."
