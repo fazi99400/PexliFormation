@@ -70,14 +70,47 @@ jobs:
       - name: Bundle the toolchain + crate seed into the app
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $res  = "$env:GITHUB_WORKSPACE\src-tauri\resources"
           $pt   = "$res\platform-tools"
           $seed = "$res\cargo-seed"
           New-Item -ItemType Directory -Force -Path $pt, "$seed\registry" | Out-Null
 
-          # The whole Agave active_release (bin\cargo-build-sbf.exe + bin\sdk\...).
+          # The Agave active_release (bin\cargo-build-sbf.exe + bin\sdk\...).
           $src = "$env:USERPROFILE\.local\share\solana\install\active_release"
           Copy-Item "$src\*" $pt -Recurse -Force
+
+          # The SBF platform-tools (rust incl. host cargo, + llvm) may live under
+          # the SDK, or in a cache dir. Make sure the bundle has it at the path
+          # cargo-build-sbf expects: bin\sdk\sbf\dependencies\platform-tools.
+          $depPT = "$pt\bin\sdk\sbf\dependencies\platform-tools"
+          if (-not (Test-Path "$depPT\rust\bin\cargo.exe")) {
+            Write-Host "Locating platform-tools (with host cargo) in caches..."
+            $found = $null
+            foreach ($r in @("$env:USERPROFILE\.local\share\solana", "$env:USERPROFILE\.cache\solana")) {
+              if (Test-Path $r) {
+                $c = Get-ChildItem $r -Recurse -Filter cargo.exe -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -match 'platform-tools\\rust\\bin\\cargo\.exe$' } |
+                     Select-Object -First 1
+                if ($c) { $found = $c; break }
+              }
+            }
+            if (-not $found) {
+              Write-Host "No platform-tools cargo found. All cargo.exe under solana dirs:"
+              foreach ($r in @("$env:USERPROFILE\.local\share\solana", "$env:USERPROFILE\.cache\solana")) {
+                if (Test-Path $r) { Get-ChildItem $r -Recurse -Filter cargo.exe -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName } }
+              }
+              Write-Error "Could not locate platform-tools host cargo"; exit 1
+            }
+            $ptSrc = Split-Path (Split-Path (Split-Path $found.FullName))  # ...\platform-tools
+            New-Item -ItemType Directory -Force -Path (Split-Path $depPT) | Out-Null
+            Copy-Item $ptSrc (Split-Path $depPT) -Recurse -Force
+            Write-Host "Copied platform-tools from $ptSrc"
+          }
+          if (-not (Test-Path "$depPT\rust\bin\cargo.exe")) {
+            Write-Error "Bundle still missing host cargo at $depPT\rust\bin\cargo.exe"; exit 1
+          }
+          Write-Host "OK host cargo bundled: $depPT\rust\bin\cargo.exe"
 
           # Seed only the compressed cache + index; sources extract at runtime.
           Copy-Item "$env:GITHUB_WORKSPACE\seed-cargo\registry\cache" "$seed\registry\cache" -Recurse -Force
