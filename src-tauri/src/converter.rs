@@ -200,27 +200,40 @@ fn run_build(
         cmd.env("CARGO_NET_OFFLINE", "true");
     }
 
-    // Put the bundled toolchain's own bin dirs first so its cargo/rustc/llvm win
-    // over anything on the system. cargo-build-sbf shells out to `cargo` for
-    // metadata, so the bundled host `cargo` must be discoverable here.
+    // App-private cargo home: crate downloads land inside our own data folder,
+    // seeded once from the bundled cache; the user's ~/.cargo is never touched
+    // and uninstall removes it all.
+    let cargo_home = isolated_cargo_home(app);
+    if let Some(ch) = &cargo_home {
+        cmd.env("CARGO_HOME", ch);
+    }
+
+    // If the app is running from a bundle (the shipped installer), drive the
+    // build entirely through the bundled rustup + platform-tools in a private
+    // RUSTUP_HOME — nothing on the user's system is used or changed.
+    let bundled_cargo_bin = toolchain::bundled_cargo_bin(app);
+    let is_bundled = bundled_cargo_bin.is_some() && toolchain::bundled_solana_rust(app).is_some();
+    if is_bundled {
+        if let Some(rh) = isolated_rustup_home(app) {
+            link_solana_toolchain(app, &rh, cargo_home.as_deref());
+            cmd.env("RUSTUP_HOME", &rh);
+            cmd.env("RUSTUP_TOOLCHAIN", "solana");
+        }
+    }
+
+    // Put the bundled rustup proxies and platform-tools on PATH first, so the
+    // app's own cargo/rustc/rustup win over anything on the system.
     if let Some(path) = std::env::var_os("PATH") {
         let mut paths: Vec<PathBuf> = std::env::split_paths(&path).collect();
-        if let Some(hostbin) = toolchain::bundled_host_bin(app) {
-            paths.insert(0, hostbin);
-        }
         if let Some(bindir) = toolchain::bin_dir(tool) {
             paths.insert(0, bindir);
+        }
+        if let Some(cargobin) = &bundled_cargo_bin {
+            paths.insert(0, cargobin.clone());
         }
         if let Ok(joined) = std::env::join_paths(paths) {
             cmd.env("PATH", joined);
         }
-    }
-
-    // App-private cargo home: crate downloads land inside our own data folder,
-    // seeded once from the bundled cache so common contracts build offline.
-    if let Some(cargo_home) = isolated_cargo_home(app) {
-        emit(app, &format!("Using private toolchain cache: {}", cargo_home.display()));
-        cmd.env("CARGO_HOME", &cargo_home);
     }
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -301,6 +314,37 @@ fn isolated_cargo_home(app: &AppHandle) -> Option<PathBuf> {
         }
     }
     Some(cargo_home)
+}
+
+/// An app-private RUSTUP_HOME under the app's local data dir, so the `solana`
+/// toolchain link and any rustup state stay inside our own folder (removed on
+/// uninstall) and never touch the user's ~/.rustup.
+fn isolated_rustup_home(app: &AppHandle) -> Option<PathBuf> {
+    let base = app.path().app_local_data_dir().ok()?;
+    let rustup_home = base.join("toolchain").join("rustup");
+    let _ = fs::create_dir_all(&rustup_home);
+    Some(rustup_home)
+}
+
+/// Register the bundled platform-tools Rust as the `solana` rustup toolchain in
+/// our private RUSTUP_HOME. Idempotent: re-linking an existing toolchain is a
+/// harmless no-op we ignore.
+fn link_solana_toolchain(app: &AppHandle, rustup_home: &Path, cargo_home: Option<&Path>) {
+    let (Some(cargo_bin), Some(solana_rust)) =
+        (toolchain::bundled_cargo_bin(app), toolchain::bundled_solana_rust(app))
+    else {
+        return;
+    };
+    let rustup = cargo_bin.join(toolchain::RUSTUP);
+    let mut cmd = Command::new(rustup);
+    cmd.args(["toolchain", "link", "solana"])
+        .arg(&solana_rust)
+        .env("RUSTUP_HOME", rustup_home);
+    if let Some(ch) = cargo_home {
+        cmd.env("CARGO_HOME", ch);
+    }
+    // Ignore failures (most commonly "toolchain already linked").
+    let _ = cmd.output();
 }
 
 /// Recursively copy a directory tree.

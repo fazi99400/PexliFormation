@@ -216,6 +216,44 @@ const HOST_CARGO: &str = "cargo.exe";
 #[cfg(not(windows))]
 const HOST_CARGO: &str = "cargo";
 
+#[cfg(windows)]
+pub const RUSTUP: &str = "rustup.exe";
+#[cfg(not(windows))]
+pub const RUSTUP: &str = "rustup";
+
+/// The bundled rustup proxies dir (`cargo`, `rustc`, `rustup`) — the app's own
+/// rustup, used to drive cargo-build-sbf without touching the user's system.
+pub fn bundled_cargo_bin(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let res = app.path().resource_dir().ok()?;
+    let p = res.join("resources").join("toolchain").join("cargo-bin");
+    if p.join(RUSTUP).is_file() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+/// The bundled platform-tools Rust toolchain root (contains `bin/cargo` etc.),
+/// which we register as the `solana` rustup toolchain at runtime.
+pub fn bundled_solana_rust(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let res = app.path().resource_dir().ok()?;
+    let known = res
+        .join("resources")
+        .join("platform-tools")
+        .join("bin")
+        .join("sdk")
+        .join("sbf")
+        .join("dependencies")
+        .join("platform-tools")
+        .join("rust");
+    if known.join("bin").join(HOST_CARGO).is_file() {
+        return Some(known);
+    }
+    // Fallback: find the bin dir with cargo and take its parent (the toolchain root).
+    let root = res.join("resources").join("platform-tools");
+    find_dir_with(&root, HOST_CARGO, 8).and_then(|bin| bin.parent().map(|p| p.to_path_buf()))
+}
+
 /// The bundled host toolchain bin dir (the `rust/bin` inside platform-tools
 /// that holds `cargo`/`rustc`). `cargo-build-sbf` shells out to `cargo` for
 /// metadata, so this must be on PATH — and we want *our* bundled one, never the
