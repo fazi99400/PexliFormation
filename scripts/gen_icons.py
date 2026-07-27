@@ -69,6 +69,36 @@ def make_ico(png_256):
     return header + entry + png_256
 
 
+def bmp_bytes(w, h, px):
+    # px[y][x] = (r,g,b), top-to-bottom. BMP is 24-bit, bottom-up, 4-byte rows.
+    row_pad = (-(w * 3)) % 4
+    raw = bytearray()
+    for y in range(h - 1, -1, -1):
+        for x in range(w):
+            r, g, b = px[y][x]
+            raw += bytes((b, g, r))
+        raw += b"\x00" * row_pad
+    size = 14 + 40 + len(raw)
+    fh = b"BM" + struct.pack("<IHHI", size, 0, 0, 54)
+    ih = struct.pack("<IiiHHIIiiII", 40, w, h, 1, 24, 0, len(raw), 2835, 2835, 0, 0)
+    return fh + ih + bytes(raw)
+
+
+def brand_pixels(w, h, box):
+    # Diagonal rust->blue gradient with a white "P" inside the given square box.
+    bx, by, side = box
+    px = [[(0, 0, 0)] * w for _ in range(h)]
+    for y in range(h):
+        for x in range(w):
+            t = (x + y) / (w + h)
+            col = (lerp(RUST[0], BLUE[0], t), lerp(RUST[1], BLUE[1], t), lerp(RUST[2], BLUE[2], t))
+            if bx <= x < bx + side and by <= y < by + side:
+                if in_p(x - bx, y - by, side):
+                    col = (0xFF, 0xFF, 0xFF)
+            px[y][x] = col
+    return px
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     sizes = {"32x32.png": 32, "128x128.png": 128, "128x128@2x.png": 256, "icon.png": 512}
@@ -80,7 +110,16 @@ def main():
             f.write(data)
     with open(os.path.join(OUT, "icon.ico"), "wb") as f:
         f.write(make_ico(pngs[256]))
-    print("icons written to", os.path.normpath(OUT))
+
+    # NSIS installer branding images (24-bit BMP) with the same P logo.
+    header = brand_pixels(150, 57, (6, 2, 53))
+    with open(os.path.join(OUT, "installer-header.bmp"), "wb") as f:
+        f.write(bmp_bytes(150, 57, header))
+    sidebar = brand_pixels(164, 314, (18, 24, 128))
+    with open(os.path.join(OUT, "installer-sidebar.bmp"), "wb") as f:
+        f.write(bmp_bytes(164, 314, sidebar))
+
+    print("icons + installer BMPs written to", os.path.normpath(OUT))
 
 
 if __name__ == "__main__":

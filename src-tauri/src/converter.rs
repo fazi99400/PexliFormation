@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::toolchain;
 
@@ -166,18 +166,19 @@ codegen-units = 1
 }
 
 /// Run `cargo build-sbf`, streaming every output line to the UI as it happens.
+///
+/// The build is fully self-contained and isolated: it uses the bundled
+/// toolchain and an app-private CARGO_HOME, so it never installs anything and
+/// never touches the user's own Rust/cargo setup.
 fn run_build(app: &AppHandle, tool: &Path, project_dir: &Path) -> Result<(), String> {
     // `cargo-build-sbf` is invoked directly; it behaves like `cargo build-sbf`.
     let mut cmd = Command::new(tool);
     cmd.current_dir(project_dir);
 
-    // Make sure both the platform-tools bin dir AND the host cargo (~/.cargo/bin,
-    // which drives the SBF build) are discoverable.
+    // Put the bundled toolchain's own bin dir first so its rust/llvm win over
+    // anything on the system.
     if let Some(path) = std::env::var_os("PATH") {
         let mut paths: Vec<PathBuf> = std::env::split_paths(&path).collect();
-        if let Some(cargo) = toolchain::cargo_bin() {
-            paths.insert(0, cargo);
-        }
         if let Some(bindir) = toolchain::bin_dir(tool) {
             paths.insert(0, bindir);
         }
@@ -186,25 +187,35 @@ fn run_build(app: &AppHandle, tool: &Path, project_dir: &Path) -> Result<(), Str
         }
     }
 
+    // App-private cargo home: crate downloads land inside our own data folder,
+    // seeded once from the bundled cache so common contracts build offline.
+    if let Some(cargo_home) = isolated_cargo_home(app) {
+        emit(app, &format!("Using private toolchain cache: {}", cargo_home.display()));
+        cmd.env("CARGO_HOME", &cargo_home);
+    }
+
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start cargo build-sbf: {e}"))?;
 
-    // Stream stderr (cargo writes progress here) then stdout.
-    if let Some(stderr) = child.stderr.take() {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            emit(app, &line);
+    // Drain stderr on its own thread so a full pipe can't block stdout.
+    let stderr = child.stderr.take();
+    let app2 = app.clone();
+    let joiner = std::thread::spawn(move || {
+        if let Some(e) = stderr {
+            for line in BufReader::new(e).lines().map_while(Result::ok) {
+                let _ = app2.emit("build-log", line);
+            }
         }
-    }
+    });
     if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             emit(app, &line);
         }
     }
+    let _ = joiner.join();
 
     let status = child.wait().map_err(|e| e.to_string())?;
     if !status.success() {
@@ -212,6 +223,41 @@ fn run_build(app: &AppHandle, tool: &Path, project_dir: &Path) -> Result<(), Str
             "SBF build failed (exit {}). See the log for compiler errors.",
             status.code().unwrap_or(-1)
         ));
+    }
+    Ok(())
+}
+
+/// An app-private CARGO_HOME under the app's local data dir. Crate downloads go
+/// here (never to the user's ~/.cargo), and the whole folder is removed on
+/// uninstall. Seeded once from the bundled crate cache so the common
+/// solana-program contract builds without any network access.
+fn isolated_cargo_home(app: &AppHandle) -> Option<PathBuf> {
+    let base = app.path().app_local_data_dir().ok()?;
+    let cargo_home = base.join("toolchain").join("cargo");
+    if !cargo_home.exists() {
+        let _ = fs::create_dir_all(&cargo_home);
+        if let Ok(res) = app.path().resource_dir() {
+            let seed = res.join("resources").join("cargo-seed");
+            if seed.is_dir() {
+                emit(app, "Preparing the bundled crate cache (first run only)…");
+                let _ = copy_dir_all(&seed, &cargo_home);
+            }
+        }
+    }
+    Some(cargo_home)
+}
+
+/// Recursively copy a directory tree.
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let target = dst.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)?;
+        }
     }
     Ok(())
 }

@@ -13,8 +13,9 @@ yarn-error.log
 *.msi
 *.exe.zip
 
-# Bundled toolchain (large; not committed)
+# Bundled toolchain + crate seed (large; produced by CI, not committed)
 /src-tauri/resources/platform-tools/
+/src-tauri/resources/cargo-seed/
 
 # OS / editor
 .DS_Store

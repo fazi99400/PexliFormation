@@ -6,9 +6,12 @@ Think of it as a *translator*: on the left you drop your Rust contract, you clic
 
 ![Rust → SBF](https://img.shields.io/badge/Rust-%E2%86%92%20SBF-orange) ![Windows](https://img.shields.io/badge/Windows-one--click%20install-blue) ![Offline](https://img.shields.io/badge/works-offline-green)
 
-> **Verified on CI (Windows):** `examples/hello_pexli.rs` converts to a working
-> `hello_pexli.so` SBF program (18,560 bytes) using the exact flow the app runs.
-> The one-click Windows installer (`.exe` + `.msi`) builds green on every push.
+> **Self-contained & verified on CI (Windows):** the SBF toolchain is bundled
+> inside the app, and CI proves the bundled compiler converts
+> `examples/hello_pexli.rs` to a working `hello_pexli.so` **offline**, with a
+> minimal PATH and an isolated cache — no system Rust, nothing installed. The
+> one-click `.exe` installer builds green on every push; a clean uninstall
+> removes everything.
 
 ---
 
@@ -21,11 +24,12 @@ Think of it as a *translator*: on the left you drop your Rust contract, you clic
 
 ## Roman-Urdu quick note (aap ke liye)
 
-- Ye ek **Windows software** hai — one-click install ho jata hai (`.exe` / `.msi`).
+- Ye ek **Windows software** hai — one-click install ho jata hai (`.exe`).
 - Isme aap apna **Rust contract** dalen (jo Pexli v2 par chalta hai), aur **Convert** dabayen.
 - Ye us ko **SBF format** (`.so`) me convert kar deta hai — bilkul kisi translator ki tarah.
 - **Terminal ki zarurat nahi**, sab kuch UI se hota hai, aur **offline** chalta hai.
-- Sirf **ek dafa** SBF toolchain setup karna hota hai (badge par click, ya `scripts\setup-toolchain.ps1`). Uske baad hamesha offline.
+- **Kuch bhi alag install nahi karna** — SBF toolchain app ke andar hi bundled hai, apni alag files me. System ka koi Rust/setting ko haath nahi lagata.
+- **Uninstall** karne par sab kuch saaf ho jata hai — kuch peeche nahi rehta.
 
 ---
 
@@ -33,8 +37,7 @@ Think of it as a *translator*: on the left you drop your Rust contract, you clic
 
 1. Download the installer from the project's **Releases** page (`PexliFormation_1.0.0_x64-setup.exe` or `.msi`).
 2. Double-click → install (one click).
-3. Open **PexliFormation**.
-4. First run only: if the toolchain badge (top-right) is red, click it — it finishes the one-time SBF setup. After that it stays green and works offline.
+3. Open **PexliFormation**. That's it — the SBF toolchain is already inside the app; nothing else to install.
 
 ## Use it
 
@@ -61,19 +64,27 @@ PexliFormation is a [Tauri v2](https://tauri.app) app — a Rust backend + a tin
 ```bash
 npm install
 npm run dev          # run the app in dev mode
-npm run build:win    # produce the one-click Windows installer (NSIS + MSI)
+npm run build:win    # produce the one-click NSIS installer
 ```
-The installer lands in `src-tauri/target/release/bundle/`.
+The installer lands in `src-tauri/target/release/bundle/nsis/`.
 
-> Tip: an even easier route is the **GitHub Actions** workflow in
-> [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml) —
-> push a tag like `v1.0.0` and it builds and attaches the Windows installer to a Release.
+> **Recommended: build via GitHub Actions.** The workflow in
+> [`.github/workflows/build-windows.yml`](.github/workflows/build-windows.yml)
+> downloads the SBF toolchain + a seed crate cache, **bundles them inside the
+> app**, verifies the bundle converts offline, and produces the self-contained
+> installer. Run it manually ("Run workflow") or push a `v*` tag to also publish
+> a Release. Building the bundled installer locally requires the platform-tools
+> in `src-tauri/resources/platform-tools/` (see the workflow for how it stages
+> them).
 
-### Making it 100% offline (bundled toolchain)
-Drop a copy of the Solana/Agave `platform-tools` into
-`src-tauri/resources/platform-tools/` before building — see
-[`src-tauri/resources/README.txt`](src-tauri/resources/README.txt). The app
-prefers that bundled toolchain, so the installed software never touches the network.
+### How the bundle stays isolated
+- The compiler lives in `resources/platform-tools/` **inside the app** — the
+  installed program uses only that, never your system Rust.
+- Crate downloads go to an app-private `CARGO_HOME` under
+  `%LOCALAPPDATA%\com.pexli.formation\toolchain\`, seeded from a bundled cache
+  so the common contract builds with no network.
+- Your own `~/.cargo` and any existing toolchain are never read or modified.
+- Uninstall removes the app **and** that private cache (NSIS post-uninstall hook).
 
 ---
 
